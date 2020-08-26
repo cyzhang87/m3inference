@@ -9,7 +9,7 @@ import json
 print("---An example tweet---")
 with open("./twitter_cache/example_tweets.jsonl","r") as fh:
 	tweet=json.loads(fh.readline())
-	pprint.pprint(tweet)
+	#pprint.pprint(tweet)
 
 
 print("---Now let's transform this data to the input needed for m3--")
@@ -18,7 +18,8 @@ m3twitter=M3Twitter(cache_dir="./twitter_cache")
 #m3twitter.transform_jsonl_object(tweet)
 
 #But, let's transform the whole file.
-m3twitter.transform_jsonl(input_file="./twitter_cache/example_tweets.jsonl",output_file="./twitter_cache/m3_input.jsonl")
+#m3twitter.transform_jsonl(input_file="./twitter_cache/example_tweets.jsonl",output_file="./twitter_cache/m3_input.jsonl")
+m3twitter.transform_jsonl(input_file="./twitter_cache/origin_tweets.csv",output_file="./twitter_cache/m3_input.jsonl")
 
 print("---An entry in the m3 input file---")
 with open("./twitter_cache/m3_input.jsonl","r") as fh:

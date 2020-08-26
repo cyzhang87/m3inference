@@ -6,6 +6,7 @@ import html
 import json
 import logging
 import os
+import ast
 from rauth import OAuth1Service
 from os.path import expanduser
 
@@ -14,7 +15,7 @@ from .m3inference import M3Inference
 from .preprocess import download_resize_img
 from .utils import get_lang
 
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(funcName)s - %(levelname)s: %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 
@@ -33,84 +34,83 @@ class M3Twitter(M3Inference):
                  use_full_model=True, use_cuda=True, parallel=False, seed=0):
         super(M3Twitter, self).__init__(model_dir=model_dir, pretrained=pretrained, use_full_model=use_full_model,
                                         use_cuda=use_cuda, parallel=parallel, seed=seed)
-        self.cache_dir = cache_dir
+        self.cache_dir = os.path.join(cache_dir, 'pic')
         self.twitter_session=None
         if not os.path.isdir(self.cache_dir):
             logger.info(f'Dir {self.cache_dir} does not exist. Creating now.')
             os.makedirs(self.cache_dir)
             logger.info(f'Dir {self.cache_dir} created.')
 
-    def transform_jsonl(self, input_file, output_file, img_path_key=None, lang_key=None, resize_img=True,
+    def transform_jsonl(self, input_file, output_file, img_path_key=None, lang_key='lang', resize_img=True,
                         keep_full_size_img=False):
-        with open(input_file, "r") as fhIn:
+        with open(input_file, "r", encoding='utf-8') as fhIn: #, encoding='utf-8'
             with open(output_file, "w") as fhOut:
                 for line in fhIn:
                     m3vals = self.transform_jsonl_object(line, img_path_key=img_path_key, lang_key=lang_key,
                                                          resize_img=resize_img, keep_full_size_img=keep_full_size_img)
                     fhOut.write("{}\n".format(json.dumps(m3vals)))
 
-    def transform_jsonl_object(self, input, img_path_key=None, lang_key=None, resize_img=True,
-                               keep_full_size_img=False):
+    def transform_jsonl_object(self, input, img_path_key='profile_image_url', lang_key='lang', resize_img=True,
+                               keep_full_size_img=True):
         """
         input is either a Twitter tweet object (https://developer.twitter.com/en/docs/tweets/data-dictionary/overview/tweet-object)
             or a Twitter user object (https://developer.twitter.com/en/docs/tweets/data-dictionary/overview/user-object)
         """
         if isinstance(input, str):
-            input = json.loads(input)
-
-        if "user" in input:
-            user = input["user"]
+            #input = json.loads(input) #to dict
+            input = ast.literal_eval(input) # to dict
+        if "includes" in input and "users" in input["includes"]:
+            user = input["includes"]["users"][0]
         else:
-            user = input
+            logging.warning(input)
+            return
 
-        if img_path_key != None and img_path_key in user:
-            img_path = user[img_path_key]
-            if resize_img:
-                img_file_resize = "{}/{}_224x224.{}".format(self.cache_dir, user["id_str"], get_extension(img_path))
-                download_resize_img(img_path, img_file_resize)
-            else:
-                img_file_resize = img_path
-        elif img_path_key != None and img_path_key in input:
-            img_path = input[img_path_key]
-            if resize_img:
-                img_file_resize = "{}/{}_224x224.{}".format(self.cache_dir, user["id_str"], get_extension(img_path))
-                download_resize_img(img_path, img_file_resize)
-            else:
-                img_file_resize = img_path
-        elif user["default_profile_image"]:
-            # Default profile image
-            img_file_resize = TW_DEFAULT_PROFILE_IMG
+        img_path = user['profile_image_url']
+        img_path = img_path.replace("_normal", "_400x400")
+        dotpos = img_path.rfind(".")
+        # for some img_path, there is no '.' and extention, eg. https://pbs.twimg.com/profile_images/1303391057/XW0BrwDh_normal
+        dotpos_pic = img_path.rfind("_400x400")
+        if dotpos_pic > dotpos:
+            img_file_full = "{}/{}.jpg".format(self.cache_dir, user["id"])
+            img_file_resize = "{}/{}_224x224.jpg".format(self.cache_dir, user["id"])
         else:
-            img_path = user["profile_image_url_https"]
-            img_path = img_path.replace("_normal", "_400x400")
-            dotpos = img_path.rfind(".")
-            img_file_full = "{}/{}.{}".format(self.cache_dir, user["id_str"], img_path[dotpos + 1:])
-            img_file_resize = "{}/{}_224x224.{}".format(self.cache_dir, user["id_str"], get_extension(img_path))
-            if not os.path.isfile(img_file_resize):
-                if keep_full_size_img:
-                    download_resize_img(img_path, img_file_resize, img_file_full)
-                else:
-                    download_resize_img(img_path, img_file_resize)
+            img_file_full = "{}/{}.{}".format(self.cache_dir, user["id"], img_path[dotpos + 1:])
+            img_file_resize = "{}/{}_224x224.{}".format(self.cache_dir, user["id"], get_extension(img_path))
+        if not os.path.isfile(img_file_resize):
+            try_count = 5
+            if keep_full_size_img:
+                ret = download_resize_img(img_path, img_file_resize, img_file_full)
+                while ret < -1 and try_count > 0:
+                    logging.warning("userid: {}, ret: {}, try_count: {}".format(user["id"], ret, try_count))
+                    ret = download_resize_img(img_path, img_file_resize, img_file_full)
+                    try_count -= 1
+            else:
+                ret = download_resize_img(img_path, img_file_resize)
+                while ret < -1 and try_count > 0:
+                    logging.warning("userid: {}, ret: {}, try_count: {}".format(user["id"], ret, try_count))
+                    ret = download_resize_img(img_path, img_file_resize)
+                    try_count -= 1
+            #can not download the pic, so use the default
+            if ret < -1 and try_count == 0:
+                ret = -1
+            #can not find the pic ,so use the default
+            if ret == -1:
+                logging.warning(str(user["id"]) + " has not download picture, use default_profile_400x400.png instead." )
+                img_file_resize = os.path.join(os.path.dirname(img_file_resize), 'default_profile_400x400.png')
+
         bio = user["description"]
         if bio == None:
             bio = ""
 
-        if lang_key != None and lang_key in user:
-            lang = user[lang_key]
-        elif lang_key != None and lang_key in input:
-            lang = input[lang_key]
-        elif bio == "":
-            lang = UNKNOWN_LANG
-        else:
-            lang = get_lang(bio)
+        lang = input['data']['lang']
 
         output = {
-            "description": bio,
-            "id": user["id_str"],
-            "img_path": img_file_resize,
-            "lang": lang,
+            "id": str(user["id"]),
             "name": user["name"],
-            "screen_name": user["screen_name"]
+            "screen_name": user["username"],
+            "description": bio,
+            "lang": lang,
+            "img_path": img_file_resize
         }
         return output
 

@@ -1,37 +1,60 @@
 #!/usr/bin/env python3
-# @Zijian Wang
-
-import argparse
 import glob
 import json
 import logging
 import os
 import urllib.request
+import requests
 from io import BytesIO
-
+import time
 from PIL import Image
 from tqdm import tqdm
 
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(funcName)s - %(levelname)s: %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 
+sleep_time = 3
 
 def download_resize_img(url, img_out_path, img_out_path_fullsize=None):
     # url=url.replace("_200x200","_400x400")
+    dowload_flag = False
     try:
-        img_data = urllib.request.urlopen(url)
-        img_data = img_data.read()
-        if img_out_path_fullsize != None:
-            with open(img_out_path_fullsize, "wb") as fh:
-                fh.write(img_data)
-    except urllib.error.HTTPError as err:
-        logger.warn("Error fetching profile image from Twitter. HTTP error code was {}.".format(err.code))
-        return None
+        #img_data = urllib.request.urlopen(url)
+        #img_data = img_data.read()
+        with requests.get(url, stream=False) as response:
+            if response.status_code is not 200:
+                logging.warning(response.text + " " + str(response.status_code))
+                return -1
 
-    return resize_img(BytesIO(img_data), img_out_path, force=True,url=url)
+            img_data = response.content
+            if img_out_path_fullsize != None:
+                with open(img_out_path_fullsize, "wb") as fh:
+                    fh.write(img_data)
+            dowload_flag = True
+
+    except urllib.error.HTTPError as err:
+        logger.warning("Error fetching profile image from Twitter. HTTP error code was {}. wait 3 seconds".format(err.code))
+        logger.warning(url)
+        time.sleep(sleep_time)
+        return -2
+    except requests.exceptions.ProxyError as err:
+        logger.warning("Error fetching profile image from Twitter. Proxy error code was {}. wait 3 seconds".format(err))
+        logger.warning(url)
+        time.sleep(sleep_time)
+        return -3
+    except:
+        logging.warning('Unfortunitely, an unknow error happened, wait 3 seconds')
+        logger.warning(url)
+        time.sleep(sleep_time)
+        return -4
+
+    if dowload_flag == False:
+        return -5
+    resize_img(BytesIO(img_data), img_out_path, force=True, url=url)
+    return 0
 
 
 def resize_img(img_path, img_out_path, filter=Image.BILINEAR, force=False,url=None):
@@ -80,8 +103,9 @@ def update_json(jsonl_filepath, jsonl_outfilepath, src_root, dest_root):
     new_jsons = []
     for j in list_of_jsons:
         img_path = j['img_path']
-        j['img_path'] = os.path.splitext(os.path.abspath(os.path.join(dest_root, os.path.relpath(img_path, src_root))))[
-                            0] + '.jpeg'
+        #j['img_path'] = os.path.splitext(os.path.abspath(os.path.join(dest_root, os.path.basename(img_path))))[0] + '.jpeg'
+        #use relative path
+        j['img_path'] = os.path.splitext(os.path.join(dest_root, os.path.basename(img_path)))[0] + '.jpeg'
         new_jsons.append(j)
     logger.info(f'Saving jsons to {jsonl_outfilepath}')
     with open(jsonl_outfilepath, 'w') as outfile:
